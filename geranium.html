@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html>
+<head>
+        <meta charset="utf8">
+        <title>Géranium</title>
+        <link rel="icon" type="image/png" href="geranium.png" />
+    </head>
+<body>
+<canvas id="myCanvas" width="650" height="650" oncontextmenu="return false;" onselectstart = "return false;" }></canvas>
+<input type="text" value="" id="myInput">
+<button onclick="saveToClip()">Save to clipboard</button>
+<button onclick="reset()">Restart</button>
+<button onclick="scramble(2000)">Scramble</button>
+<button onclick="loadFromInput()">Load From input</button>
+<script type="text/javascript">
+var canvas = document.getElementById("myCanvas");
+var elemLeft = canvas.offsetLeft;
+var elemTop = canvas.offsetTop;
+var ctx = canvas.getContext("2d");
+var size = 3;
+var frames = 0;
+var R = Math.sqrt(4-Math.sqrt(5));
+var Rcan = R /size/2 * canvas.width;
+var currentMousePos = 0;
+var outside = true;
+
+//définition des matrices d'opération utilisés
+
+var idMat = [
+  [1, 0, 0, 0, 0],
+  [0, 1, 0, 0, 0],
+  [0, 0, 1, 0, 0],
+  [0, 0, 0, 1, 0],
+  [0, 0, 0, 0, 1]
+];
+var rot0 = [[2/5, 2/5, -3/5, 2/5, 2/5],
+  [2/5, 2/5, 2/5, -3/5, 2/5],
+  [2/5, 2/5, 2/5, 2/5, -3/5],
+  [-3/5, 2/5, 2/5, 2/5, 2/5],
+  [2/5, -3/5, 2/5, 2/5, 2/5]
+];
+var rot = [];
+for (let i = 0; i<10; i++) {
+  rot.push(matExp(rot0, i));
+}
+var tr0 = [
+  [9/5, 4/5, 4/5, 4/5, 4/5],
+  [-1/5, 4/5, -1/5, -1/5, -1/5],
+  [-1/5, -1/5, 4/5, -1/5, -1/5],
+  [-1/5, -1/5, -1/5, 4/5, -1/5],
+  [-1/5, -1/5, -1/5, -1/5, 4/5]
+];
+var tr = [];
+for (let i = 0; i<10; i++) {
+  tr.push(matFold([rot[i], tr0, rot[(10-i) % 10]]));
+}
+var circs = []
+for (let i = 0; i < 5; i++) {
+  circs.push([]);
+  for (let j = 0; j< 10; j++) {
+    circs[i].push(matFold([tr[2*i], rot[j], tr[(2*i + 5)%10]]));
+  }
+}
+
+//définition des pièces utilisés
+
+var basicWedge = [[idMat[2], true], [idMat[3], false], [idMat[4], true]];
+var basicLargeP = [[idMat[3], false], [idMat[4], true], [times(circs[0][3], idMat[3]), false], [idMat[0], true], [idMat[1], false]];
+var basicConcaveP = [[idMat[1], true], [idMat[2], false], [times(circs[1][1], idMat[2]), true], [idMat[3], false], [idMat[4], true]];
+var basicRegP = [[idMat[0], true], [idMat[1], true], [idMat[2], true], [idMat[3], true], [idMat[4], true]];
+var basicStem = [[idMat[0], false], [idMat[3], false], [idMat[4], true], [times(circs[4][3], idMat[2]), false], [times(circs[4][7], idMat[1]), false]];
+var piece2 = timesPiece(rot[4], basicWedge);
+var piece3 = timesPiece(rot[6], basicConcaveP);
+var piece4 = timesPiece(rot[2], basicWedge);
+var colors = [];
+var colorcodes = ["#FF0000", "#008000", "#000080", "#FFFF00", "#00FFFF"];
+var pieces = [];
+var lengths = [5, 3, 3, 3, 3, 5, 5, 5, 5, 5, 3, 3, 3, 5, 3, 3, 3, 3, 3, 5, 5, 5, 5, 5, 3, 3, 3, 5, 3, 3, 3, 3, 3, 5, 5, 5, 5, 5, 3, 3, 3, 5, 3, 3, 3, 3, 3, 5, 5, 5, 5, 5, 3, 3, 3, 5, 3, 3, 3, 3, 3, 5, 5, 5, 5, 5, 3, 3, 3, 5, 3];
+
+//nodes
+
+var nodeLists = [];
+function calculateNodeLists() {
+  nodeLists = [];
+  for (let p = 0; p< pieces.length; p++) {
+    n = [];
+    q = pieces[p];
+    for (let i= 0; i< q.length; i++) {
+      for (let j= 0; j< i; j++) {
+        if (distance(getXY(q[i][0]), getXY(q[j][0])) < 2*R) {
+          if (inPiece(intersectionCoord(q[i][0], q[j][0], 1), p)) {
+            n.push([i, j, 1])
+          }
+          if (inPiece(intersectionCoord(q[i][0], q[j][0], -1), p)) {
+            n.push([i, j, -1])
+          }
+        }
+      }
+    }
+    if ((pieces[p][n[0][1]][1] == pieces[p][n[0][0]][1]) != (n[0][2]==-1)) {
+      n[0] = [n[0][1], n[0][0], -n[0][2]];
+    }
+    for (let j=1; j< n.length; j++) {
+      for (let k=j; k< n.length; k++) {
+        if (eqVect(pieces[p][n[j-1][1]][0], pieces[p][n[k][0]][0])) {
+          u = n[k];
+          n[k] = n[j];
+          n[j] = u;
+        }
+        if (eqVect(pieces[p][n[j-1][1]][0], pieces[p][n[k][1]][0])) {
+          n[k] = [n[k][1], n[k][0], -n[k][2]];
+          u = n[k];
+          n[k] = n[j];
+          n[j] = u;
+        }
+      }
+    }
+    nodeLists.push(n)
+  }
+}
+
+//process
+
+reset();
+
+//desseins
+function drawPieces(theta = 0, k = 0) {
+  if (theta != 0) {
+    frames = Math.max(frames-1, 0);
+  }
+  ctx.strokeStyle = "#000000";
+  ctx.lineWidth = 2;
+  for (let d = 0; d<2; d++) {
+    weird = nodeLists[0];
+    isobar = [0, 0];
+    for (let i = 0; i < 5; i++) {
+      isobar[0] += map1(getXY(pieces[0][i][0]))[0];
+      isobar[1] += map1(getXY(pieces[0][i][0]))[1]
+    }
+    isobar = [isobar[0]/5, isobar[1]/5];
+    if (theta != 0) {
+      if(pieceIn(0, k)) {
+        isobar = map1(softRot(theta, Math.cos(2*Math.PI/5*k), Math.sin(2*Math.PI/5*k), map(isobar)));
+      }
+    }
+    for (let i = 0; i < 5; i++) {
+      center = map1(getXY(nodePoint(0, i, 1)));
+      u = nodeCoord(0, i);
+      v = nodeCoord(0, ((i+1)%5));
+      if (theta != 0) {
+        if(pieceIn(0, k)) {
+          center = map1(softRot(theta, Math.cos(2*Math.PI/5*k), Math.sin(2*Math.PI/5*k), map(center)));
+          u = map1(softRot(theta, Math.cos(2*Math.PI/5*k), Math.sin(2*Math.PI/5*k), map(u)));
+          v = map1(softRot(theta, Math.cos(2*Math.PI/5*k), Math.sin(2*Math.PI/5*k), map(v)));
+        }
+      }
+      angle1 = Math.atan2(u[1]-center[1], u[0]-center[0]);
+      angle2 = Math.atan2(v[1]-center[1], v[0]-center[0]);
+      ctx.fillStyle = colorcodes[(4-i+3)%5];
+      ctx.beginPath();
+      ctx.arc(center[0], center[1], Rcan, angle1, angle2, !nodeBool(i, 1, 1));
+      ctx.lineTo(isobar[0], isobar[1]);
+      ctx.closePath();
+      if (d == 0) {
+        ctx.fill();
+      } else {
+        ctx.stroke();
+      }
+    }
+    ctx.lineWidth = 1;
+
+    for (let p = 1; p<pieces.length; p++) {
+      if (theta == 0 || pieceIn(p, k)) {
+        ctx.beginPath();
+        for (let i = 0; i< nodeLists[p].length; i++) {
+          center = map1(getXY(nodePoint(p, i, 1)));
+          u = nodeCoord(p, i);
+          v = nodeCoord(p, ((i+1)%nodeLists[p].length));
+          if (theta != 0) {
+            if(pieceIn(p, k)) {
+              center = map1(softRot(theta, Math.cos(2*Math.PI/5*k), Math.sin(2*Math.PI/5*k), map(center)));
+              u = map1(softRot(theta, Math.cos(2*Math.PI/5*k), Math.sin(2*Math.PI/5*k), map(u)));
+              v = map1(softRot(theta, Math.cos(2*Math.PI/5*k), Math.sin(2*Math.PI/5*k), map(v)))
+            }
+          }
+          angle1 = Math.atan2(u[1]-center[1], u[0]-center[0]);
+          angle2 = Math.atan2(v[1]-center[1], v[0]-center[0]);
+
+
+          ctx.arc(center[0], center[1], Rcan, angle1, angle2, !nodeBool(p, i, 1));
+        }
+        ctx.fillStyle = colorcodes[colors[p]];
+        ctx.closePath();
+        if (d == 0) {
+          ctx.fill();
+        } else {
+          ctx.stroke();
+        }
+      }
+    }
+  }
+}
+
+
+// clics
+canvas.addEventListener('click', function(event) {
+  a = Date.now();
+   var xVal = event.pageX - elemLeft,
+   yVal = event.pageY - elemTop;
+   q = map([xVal, yVal]);
+   if (distance(q, [0, 0]) > 1 && distance(q, [0, 0]) < 3) {
+     v = (Math.floor(10*Math.atan2(q[1], q[0])/Math.PI/2 +11) % 10);
+     i=Math.floor(v/2);
+     ret = move(i, 1-2*(v%2));
+     if (ret) {
+       if (frames == 0) {
+         frames = 9;
+         for (let j = 1; j< 10; j++) {
+           setTimeout(drawPieces, 10*j, 2*Math.PI/100*(10-j)*((v%2)*2-1), i);
+         }
+         setTimeout(drawPieces, 91);
+       }
+     }
+   }
+}, false);
+
+canvas.addEventListener('mousemove', function(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  var xVal = event.pageX - elemLeft,
+  yVal = event.pageY - elemTop;
+  q = map([xVal, yVal]);
+  v = (Math.floor(10*Math.atan2(q[1], q[0])/Math.PI/2 +11) % 10);
+  if (v != currentMousePos || (outside != (distance(q, [0, 0]) > 1 && distance(q, [0, 0]) < 3)) ) {
+    p = map1([2.7*Math.cos((v-1/2)*2*Math.PI/10), 2.7*Math.sin((v-1/2)*2*Math.PI/10)]);
+    r= map1([2.7*Math.cos((currentMousePos-1/2)*2*Math.PI/10), 2.7*Math.sin((currentMousePos-1/2)*2*Math.PI/10)]);
+
+    ctx.fillStyle = "#CCCCCC";
+    ctx.beginPath();
+    ctx.ellipse(r[0], r[1], 10, 10, 0, 0, 2*Math.PI);
+    ctx.fill();
+
+    if (distance(q, [0, 0]) > 1 && distance(q, [0, 0]) < 3) {
+      ctx.fillStyle = "#888888";
+      ctx.beginPath();
+      ctx.ellipse(p[0], p[1], 7, 7, 0, 0, 2*Math.PI);
+      ctx.fill();
+    }
+
+    currentMousePos = v;
+  }
+  outside = !(distance(q, [0, 0]) > 1 && distance(q, [0, 0]) < 3)
+}, false);
+
+canvas.addEventListener('mouseleave', function(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  ctx.fillStyle = "#CCCCCC";
+  r= map1([2.7*Math.cos((currentMousePos-1/2)*2*Math.PI/10), 2.7*Math.sin((currentMousePos-1/2)*2*Math.PI/10)]);
+  ctx.beginPath();
+  ctx.ellipse(r[0], r[1], 10, 10, 0, 0, 2*Math.PI);
+  ctx.fill();
+  outside = true;
+}, false);
+
+
+// opérations
+
+function move(i, dir) {
+  ret = isNotLocked(i);
+  if (ret) {
+    for (let p = 0; p< pieces.length; p++) {
+      if (pieceIn(p, i)) {
+        pieces[p] = timesPiece(circs[i][(10-dir)%10], pieces[p]);
+      }
+    }
+  }
+  return ret
+}
+function scramble(N) {
+  j = randInt(5);
+  for (let i=0; i< N; i++) {
+    off = randInt(4)+1;
+    j = (j+off)%5;
+    move(j, randInt(9)+1);
+  }
+  drawPieces();
+}
+function reset() {
+  colors = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+  pieces = [
+    basicRegP.copyWithin(),
+    basicWedge.copyWithin(),
+    timesPiece(circs[4][9], basicWedge),
+    timesPiece(circs[4][7], basicWedge),
+    timesPiece(circs[4][6], basicWedge),
+    basicConcaveP.copyWithin(),
+    timesPiece(circs[4][7], basicConcaveP),
+    basicLargeP.copyWithin(),
+    basicStem.copyWithin(),
+    timesPiece(circs[4][7], basicRegP),
+    timesPiece(circs[4][7], piece2),
+    timesPiece(circs[4][4], piece2),
+    timesPiece(circs[4][3], piece2),
+    timesPiece(circs[4][3], piece3),
+    timesPiece(circs[0][3], piece4)
+  ]
+  for (let i = 1; i < 5; i++) {
+    for (let j = 1; j< 15; j++) {
+      pieces.push(timesPiece(rot[2*i], pieces[j]));
+      colors.push(i);
+    }
+  }
+  lens = [];
+  for (let r = 0; r< 71; r++) {
+    lens.push(pieces[r].length)
+  }
+  console.log(lens);
+  calculateNodeLists();
+  ctx.fillStyle = "#CCCCCC"
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawPieces();
+}
+
+// fonctions Matricielles
+
+function times(M, X) {
+  var res = []
+  for (let i = 0; i < 5; i++) {
+    sum = 0
+    for (let j=0; j<5; j++) {
+      sum += Math.round(5*M[i][j] * X[j])/5
+    }
+    res.push(sum)
+  }
+  return res
+}
+function timesPiece(M, p) {
+  var res = [];
+  for (let j = 0; j< p.length; j++) {
+    res.push([times(M, p[j][0]), p[j][1]]);
+  }
+  return res
+}
+function matTimes(M, N) {
+  var res = []
+    for (let i = 0; i < 5; i++) {
+      res.push([]);
+      for (let j=0; j<5; j++) {
+        sum = 0
+        for (let k=0; k<5; k++) {
+          sum += M[i][k] * N[k][j]
+        }
+        res[i].push(Math.round(5*sum)/5)
+      }
+    }
+    return res
+}
+function matExp(M, n) {
+  var Res = idMat;
+  for (let i = 0; i < n; i++) {
+    Res = matTimes(M,  Res)
+  }
+  return Res;
+}
+function matFold(Ml) {
+  var Res = idMat;
+  for (let i = 0; i < Ml.length; i++) {
+    Res = matTimes(Res, Ml[i]);
+  }
+  return Res;
+}
+
+// changement de Coordonnés et géométrie
+
+function getXY(p) {
+  var x = 0;
+  var y = 0;
+  for (let i = 0; i < 5; i++) {
+    x += p[i] * Math.cos(i*2 *Math.PI/5);
+    y += p[i] * Math.sin(i*2 *Math.PI/5)
+  }
+  return [x, y]
+}
+function distance(p1, p2) {
+  return Math.sqrt((p1[0] -p2[0])**2+(p1[1] -p2[1])**2)
+}
+function map(p1) {
+  return [(p1[0]/(canvas.width/2)-1)*size, -(p1[1]/(canvas.height/2)-1)*size]
+}
+function map1(p1) {
+  return [((p1[0]+size)/size/2) * canvas.width,((-p1[1]+size)/size/2) * canvas.height]
+}
+
+// node geometry
+
+function nodeCoord(p, i) {
+  return intersectionCoord(nodePoint(p, i, 0), nodePoint(p, i, 1), nodeLists[p][i][2])
+}
+function intersectionCoord(c1, c2, eps) {
+  p1 = map1(getXY(c1));
+  p2 = map1(getXY(c2));
+  c = [p2[0]-p1[0], p2[1]-p1[1]];
+  r = Rcan / Math.sqrt(c[0]**2 + c[1]**2);
+  if (r > 1/2) {
+    y = -eps*Math.sqrt(r**2-1/4);
+    return [p1[0]+ c[0]/2-c[1]*y, p1[1] +c[1]/2+c[0]*y]
+  } else {
+    return []
+  }
+}
+function nodePoint(p, i, k) {
+  return pieces[p][nodeLists[p][i][k]][0];
+}
+function nodeBool(p, i, k) {
+  return pieces[p][nodeLists[p][i][k]][1];
+}
+function inPiece(p, q) {
+  var truth = true;
+  for (let t = 0; t < pieces[q].length; t++) {
+    if (pieces[q][t][1]) {
+      truth = truth && (distance(map(p), getXY(pieces[q][t][0]))<=R*1.001)
+    } else {
+      truth = truth && (distance(map(p), getXY(pieces[q][t][0]))>=R/1.001)
+    }
+  }
+  return truth
+}
+
+// piece geometry
+
+function pieceIn(p, i) {
+  truth = true;
+  for (let j = 0; j< nodeLists[p].length; j++) {
+    truth = truth && distance(map1(getXY(idMat[i])), nodeCoord(p, j)) < Rcan*1.001;
+  }
+  return truth
+}
+function pieceOut(p, i) {
+  truth = true;
+  for (let j = 0; j< nodeLists[p].length; j++) {
+    truth = truth && distance(map1(getXY(idMat[i])), nodeCoord(p, j)) > Rcan*0.999;
+  }
+  return truth
+}
+function isNotLocked(i) {
+  truth = true;
+  for (let p = 0; p< pieces.length; p++) {
+    truth = truth && (pieceOut(p, i) || pieceIn(p, i));
+  }
+  return truth;
+}
+
+// basic math stuff
+
+function randInt(k) {
+  return Math.floor(Math.random()*k)
+}
+function softRot(theta, x, y, p) {
+  return [x+Math.cos(theta)*(p[0]-x)+Math.sin(theta)*(p[1]-y), y- Math.sin(theta)*(p[0]-x)+Math.cos(theta)*(p[1]-y)]
+}
+function eqVect(v1, v2) {
+  truth = true;
+  for (let i = 0; i < 5; i++) {
+    truth = truth && (Math.abs(v1[i]-v2[i]) < 0.001)
+  }
+  return truth
+}
+
+// mémoire
+
+function save() {
+  str = "";
+  for (let p = 0; p < pieces.length; p++) {
+    for (let j = 0; j < pieces[p].length; j++) {
+      for (let k = 0; k < 5; k++) {
+        str = str + (pieces[p][j][0][k]+",")
+      }
+      str = str + (0+pieces[p][j][1])+",";
+      for (let k = 0; k < 3; k++) {
+        str = str + (nodeLists[p][j][k]+",")
+      }
+    }
+  }
+  return str;
+}
+function load(str) {
+  try {
+       ls = JSON.parse("[" + str + "0]");
+       if (ls.length == 2476) {
+         reset();
+         pieces = [];
+         nodeLists = [];
+         for (let p = 0; p < 71; p++) {
+           pieces.push([]);
+           nodeLists.push([]);
+           for (let j = 0; j < lengths[p]; j++) {
+             pieces[p].push([[-1, -1, -1, -1, -1], -1]);
+             nodeLists[p].push([-1, -1, -1]);
+             for (let k = 0; k < 5; k++) {
+               pieces[p][j][0][k] = ls.shift();
+             }
+             pieces[p][j][1] = Boolean(ls.shift());
+             for (let k2 = 0; k2 < 3; k2++) {
+               nodeLists[p][j][k2] = ls.shift();
+             }
+           }
+         }
+         drawPieces();
+       }
+  } catch(e) {
+      console.log("failed load")
+      return false;
+  }
+}
+function loadFromInput() {
+  load(document.getElementById("myInput").value);
+  document.getElementById("myInput").value = "";
+}
+function saveToClip() {
+  navigator.clipboard.writeText(save());
+}
+
+</script>
+</body>
+</html>
